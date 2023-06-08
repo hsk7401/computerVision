@@ -1,0 +1,173 @@
+from google.colab import drive
+drive.mount('/content/drive')
+
+%cd /content/drive/MyDrive/Chest_XRay
+
+!unzip "archive.zip"
+
+# 필요한 모듈 import하기
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+import keras
+import tensorflow as tf
+from keras.models import Sequential
+from keras.layers import Dense, Conv2D , MaxPool2D , Flatten , Dropout , BatchNormalization
+from keras.preprocessing.image import ImageDataGenerator
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import classification_report,confusion_matrix
+from keras.callbacks import ReduceLROnPlateau
+import cv2
+import os
+import tensorflow_datasets as tfds
+
+os.environ["TF_CPP_MIN_LOG_LEVEL"] = "2"
+from keras.datasets import mnist
+
+# To Avoid GPU errors
+physical_devices = tf.config.list_physical_devices("GPU")
+tf.config.experimental.set_memory_growth(physical_devices[0], True)
+
+# 파일로부터 영상을 읽어서 data에 저장하기
+labels = ['PNEUMONIA', 'NORMAL']
+img_size = 299
+def get_training_data(data_dir):
+    data = [] 
+    for label in labels: 
+        path = os.path.join(data_dir, label)
+        class_num = labels.index(label)
+        for img in os.listdir(path):
+            try:
+                img_arr = cv2.imread(os.path.join(path, img), cv2.IMREAD_GRAYSCALE)
+                img_arr = cv2.cvtColor(img_arr, cv2.COLOR_GRAY2BGR)
+                resized_arr = cv2.resize(img_arr, (img_size, img_size)) # Reshaping images to preferred size
+                data.append([resized_arr, class_num])
+            except Exception as e:
+                print(e)
+    return np.array(data)
+
+train = get_training_data('C:\Chest_XRay_Images\chest_xray\train')
+test = get_training_data('C:\Chest_XRay_Images\chest_xray\test')
+val = get_training_data('C:\Chest_XRay_Images\chest_xray\val')
+
+print("학습용 데이터 :", train.shape)
+print("테스트 데이터 :", test.shape)
+print("검증 데이터 :", val.shape)
+
+#폐렴과 정상 데이터의 갯수 확인하기
+l = []
+for i in train:
+    if(i[1] == 0):
+        l.append("Pneumonia")
+    else:
+        l.append("Normal")
+sns.set_style('darkgrid')
+sns.countplot(l)  
+
+#영상으로 보이기
+plt.figure(figsize = (5,5))
+plt.imshow(train[0][0], cmap='gray')
+plt.title(labels[train[0][1]])
+
+plt.figure(figsize = (5,5))
+plt.imshow(train[-1][0], cmap='gray')
+plt.title(labels[train[-1][1]])
+
+x_train = []
+y_train = []
+
+x_test = []
+y_test = []
+
+x_val = []
+y_val = []
+
+for feature, label in train:
+    x_train.append(feature)
+    y_train.append(label)
+
+for feature, label in test:
+    x_test.append(feature)
+    y_test.append(label)
+
+for feature, label in val:
+    x_val.append(feature)
+    y_val.append(label)
+
+# 데이터를 Normalize 0~255  --->   0~1
+x_train = np.array(x_train) / 255
+x_val = np.array(x_val) / 255
+x_test = np.array(x_test) / 255
+
+# 딥러닝을 위해 data를 resize
+x_train = x_train.reshape(-1, img_size, img_size, 3)
+y_train = np.array(y_train)
+
+x_val = x_val.reshape(-1, img_size, img_size, 3)
+y_val = np.array(y_val)
+
+x_test = x_test.reshape(-1, img_size, img_size, 3)
+y_test = np.array(y_test)
+
+# data augmentation하기 (overfitting을 막고, 데이터셋내의 데이터 불균형도 어느 정도 해소)
+
+datagen = ImageDataGenerator(
+        featurewise_center=False,  # set input mean to 0 over the dataset
+        samplewise_center=False,  # set each sample mean to 0
+        featurewise_std_normalization=False,  # divide inputs by std of the dataset
+        samplewise_std_normalization=False,  # divide each input by its std
+        zca_whitening=False,  # apply ZCA whitening
+        rotation_range = 30,  # randomly rotate images in the range (degrees, 0 to 180)
+        zoom_range = 0.2, # Randomly zoom image 
+        width_shift_range=0.1,  # randomly shift images horizontally (fraction of total width)
+        height_shift_range=0.1,  # randomly shift images vertically (fraction of total height)
+        horizontal_flip = True,  # randomly flip images
+        vertical_flip=False)  # randomly flip images
+
+
+datagen.fit(x_train)
+
+model = tf.keras.applications.InceptionV3(include_top=True)
+print(model.summary())
+
+# ============================== #
+#          전체 미세조정         #
+# ============================== #
+base_inputs = model.layers[0].input
+base_outputs = model.layers[-2].output
+classifier = layers.Dense(2)(base_outputs)
+new_model = tf.keras.Model(inputs=base_inputs, outputs=classifier)
+optimizer = tr.keras.optimizers.Adam()
+
+new_model.compile(
+    optimizer=tr.keras.optimizers.Adam(),
+    loss=tr.keras.losses.SparseCategoricalCrossentropy(from_logits=True),
+    metrics=["accuracy"],
+)
+
+print(new_model.summary())
+
+h1 = new_model.fit(datagen.flow(x_train, y_train, batch_size=32), epochs=15, steps_per_epoch=len(x_train))
+
+epochs = [i for i in range(12)]
+fig , ax = plt.subplots(1,2)
+train_acc = history.history['accuracy']
+train_loss = history.history['loss']
+fig.set_size_inches(20,10)
+
+ax[0].plot(epochs , train_acc , 'go-' , label = 'Training Accuracy')
+ax[0].set_title('Training Accuracy')
+ax[0].legend()
+ax[0].set_xlabel("Epochs")
+ax[0].set_ylabel("Accuracy")
+
+ax[1].plot(epochs , train_loss , 'g-o' , label = 'Training Loss')
+ax[1].set_title('Testing Loss')
+ax[1].legend()
+ax[1].set_xlabel("Epochs")
+ax[1].set_ylabel("Loss")
+plt.show()
+
+test_loss, test_acc=new_model.evaluate(x_test,y_test)
+print('Test accuracy :', test_acc*100, "%")
